@@ -50,7 +50,6 @@ from mlflow_mongostore.models import (
     MongoLatestMetric,
 )
 from mlflow_mongostore.mongo_store import MongoStore, RunStatusTypes
-from tests.store.tracking import AbstractStoreTest
 
 DB_URI = "sqlite:///"
 ARTIFACT_URI = "artifact_folder"
@@ -58,7 +57,7 @@ ARTIFACT_URI = "artifact_folder"
 pytestmark = pytest.mark.notrackingurimock
 
 
-class TestMongoStore(unittest.TestCase, AbstractStoreTest):
+class TestMongoStore(unittest.TestCase):
     def _get_store(self, db_uri="mongodb://localhost:27017/test"):
         return MongoStore(db_uri, ARTIFACT_URI)
 
