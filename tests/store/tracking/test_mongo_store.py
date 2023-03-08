@@ -954,7 +954,7 @@ class TestMongoStore(unittest.TestCase, AbstractStoreTest):
         tval = None
         param = entities.Param(tkey, tval)
 
-        with pytest.raises(MlflowException) as exception_context:
+        with pytest.raises(MlflowException):
             self.store.log_param(run.info.run_id, param)
 
     def test_log_param_max_length_value(self):
@@ -1277,7 +1277,7 @@ class TestMongoStore(unittest.TestCase, AbstractStoreTest):
             "nan/2",
             "None/1",
         ]
-    
+
     def test_order_by_attributes(self):
         experiment_id = self.store.create_experiment("order_by_attributes")
 
@@ -1767,7 +1767,6 @@ class TestMongoStore(unittest.TestCase, AbstractStoreTest):
         for n in [0, 1, 2, 4, 8, 10, 20]:
             assert runs[: min(10, n)] == self._search(exp, max_results=n)
 
-    
     def test_search_runs_pagination(self):
         exp = self._experiment_factory("test_search_runs_pagination")
         # test returned token behavior
@@ -1899,7 +1898,6 @@ class TestMongoStore(unittest.TestCase, AbstractStoreTest):
         )
         assert result == []
 
-    
     def test_search_runs_start_time_alias(self):
         exp_id = self._experiment_factory("test_search_runs_start_time_alias")
         # Set start_time to ensure the search result is deterministic

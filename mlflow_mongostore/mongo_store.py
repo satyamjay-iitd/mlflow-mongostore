@@ -20,11 +20,6 @@ from mongoengine import connect, BulkWriteError
 from mongoengine.queryset.visitor import Q
 from six.moves import urllib
 
-try:
-    from mlflow.entities import Columns
-except ImportError:
-    pass
-
 from mlflow.exceptions import MlflowException
 from mlflow.utils.uri import append_to_uri_path, resolve_uri_if_local, is_local_uri
 from mlflow.utils.search_utils import SearchUtils, SearchExperimentsUtils
@@ -115,7 +110,7 @@ def _get_metrics_contains_query(key, val, comp):
         value_filter = "__lt"
     elif comp == "<=":
         value_filter = "__lte"
-    return Q(**{f"latest_metrics__match": {"key": key, f"value{value_filter}": val}})
+    return Q(**{"latest_metrics__match": {"key": key, f"value{value_filter}": val}})
 
 
 def _order_by_clause(key, ascending):
@@ -381,7 +376,7 @@ class MongoStore(AbstractStore):
             )
 
         lifecycle_stages = set(LifecycleStage.view_type_to_stages(view_type))
-        _filter = Q(**{f"lifecycle_stage__in": lifecycle_stages})
+        _filter = Q(**{"lifecycle_stage__in": lifecycle_stages})
 
         parsed_filters = SearchExperimentsUtils.parse_search_filter(filter_string)
         _filter &= _get_search_experiments_filter_clauses(parsed_filters)
