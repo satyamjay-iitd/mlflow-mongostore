@@ -1,23 +1,24 @@
 from __future__ import annotations
 
+import json
 import uuid
-import math
 from typing import List
 
-from mlflow.utils.file_utils import local_file_uri_to_path, mkdir
-from mlflow.utils.mlflow_tags import _get_run_name_from_tags, MLFLOW_RUN_NAME
-from mlflow.utils.name_utils import _generate_random_name
-from mongoengine.queryset.visitor import Q
-from mlflow.store.entities import PagedList
-from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT, SEARCH_MAX_RESULTS_THRESHOLD
-from mongoengine import connect, BulkWriteError
-from six.moves import urllib
-
-from mlflow.store.tracking.abstract_store import AbstractStore
-from mlflow.protos.databricks_pb2 import (
-    INVALID_PARAMETER_VALUE, INVALID_STATE, INTERNAL_ERROR, RESOURCE_DOES_NOT_EXIST)
+import math
 from mlflow.entities import (Experiment, RunTag, Metric, Param, Run,
                              RunStatus, LifecycleStage, ViewType, SourceType)
+from mlflow.protos.databricks_pb2 import (
+    INVALID_PARAMETER_VALUE, INVALID_STATE, RESOURCE_DOES_NOT_EXIST)
+from mlflow.store.entities import PagedList
+from mlflow.store.model_registry import DEFAULT_LOCAL_FILE_AND_ARTIFACT_PATH
+from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT, SEARCH_MAX_RESULTS_THRESHOLD
+from mlflow.store.tracking.abstract_store import AbstractStore
+from mlflow.utils.file_utils import local_file_uri_to_path, mkdir
+from mlflow.utils.mlflow_tags import _get_run_name_from_tags, MLFLOW_RUN_NAME, MLFLOW_LOGGED_MODELS
+from mlflow.utils.name_utils import _generate_random_name
+from mongoengine import connect, BulkWriteError
+from mongoengine.queryset.visitor import Q
+from six.moves import urllib
 
 try:
     from mlflow.entities import Columns
@@ -31,7 +32,7 @@ from mlflow.utils.validation import (
     _validate_batch_log_limits,
     _validate_batch_log_data,
     _validate_run_id, _validate_experiment_name, _validate_experiment_tag, _validate_metric,
-    _validate_param_keys_unique,
+    _validate_param_keys_unique, _validate_tag,
 )
 from mlflow.utils.time_utils import get_current_time_millis
 
@@ -72,6 +73,8 @@ def _get_filter_query(attr, comp, value):
         return Q(**{f"{attr}__iregex": _like_to_regex(value)})
     elif comp == "IN":
         return Q(**{f"{attr}__in": value})
+    elif comp == "NOT IN":
+        return Q(**{f"{attr}__nin": value})
 
 
 def _get_list_contains_query(key, val, comp, list_field_name):
@@ -189,7 +192,7 @@ def _get_search_run_filter_clauses(parsed_filters):
         ) or SearchUtils.is_numeric_attribute(type_, key, comparator):
             if key == "run_name":
                 # Treat "attributes.run_name == <value>" as "tags.`mlflow.runName` == <value>".
-                # The name column in the runs table is empty for runs logged in MLflow <= 1.29.0.
+                # The name column in the runs table is empty for runs logged in MLFlow <= 1.29.0.
                 _filter &= _get_list_contains_query(key=MLFLOW_RUN_NAME, val=value,
                                                     comp=comparator, list_field_name="tags")
             else:
@@ -213,66 +216,7 @@ def _get_search_run_filter_clauses(parsed_filters):
                     error_code=INVALID_PARAMETER_VALUE,
                 )
 
-
     return _filter
-
-
-# TODO Complete the implementation
-def _get_search_run_order_by_clauses(order_by_list):
-    return []
-    # clauses = []
-    # ordering_joins = []
-    # clause_id = 0
-    # observed_order_by_clauses = set()
-    # select_clauses = []
-    # # contrary to filters, it is not easily feasible to separately handle sorting
-    # # on attributes and on joined tables as we must keep all clauses in the same order
-    # if order_by_list:
-    #     for order_by_clause in order_by_list:
-    #         clause_id += 1
-    #         (key_type, key, ascending) = SearchUtils.parse_order_by_for_search_runs(order_by_clause)
-    #         key = SearchUtils.translate_key_alias(key)
-    #         if SearchUtils.is_string_attribute(
-    #                 key_type, key, "="
-    #         ) or SearchUtils.is_numeric_attribute(key_type, key, "="):
-    #             clauses.append(_order_by_clause(key, ascending))
-    #         else:
-    #             if SearchUtils.is_metric(key_type, "="):  # any valid comparator
-    #                 entity = "metrics"
-    #             elif SearchUtils.is_tag(key_type, "="):
-    #                 entity = "tags"
-    #             elif SearchUtils.is_param(key_type, "="):
-    #                 entity = "params"
-    #             else:
-    #                 raise MlflowException(
-    #                     "Invalid identifier type '%s'" % key_type,
-    #                     error_code=INVALID_PARAMETER_VALUE,
-    #                 )
-    #
-    #             # build a subquery first because we will join it in the main request so that the
-    #             # metric we want to sort on is available when we apply the sorting clause
-    #             subquery = session.query(entity).filter(entity.key == key).subquery()
-    #
-    #             ordering_joins.append(subquery)
-    #             order_value = subquery.c.value
-    #
-    #         clauses.append(case.name)
-    #         select_clauses.append(case)
-    #         select_clauses.append(order_value)
-    #
-    #         if (key_type, key) in observed_order_by_clauses:
-    #             raise MlflowException(f"`order_by` contains duplicate fields: {order_by_list}")
-    #         observed_order_by_clauses.add((key_type, key))
-    #
-    #         if ascending:
-    #             clauses.append(order_value)
-    #         else:
-    #             clauses.append(order_value.desc())
-    #
-    # if (SearchUtils._ATTRIBUTE_IDENTIFIER, SqlRun.start_time.key) not in observed_order_by_clauses:
-    #     clauses.append(SqlRun.start_time.desc())
-    # clauses.append(SqlRun.run_uuid)
-    # return select_clauses, clauses, ordering_joins
 
 
 def _get_next_exp_id(start_over=False):
@@ -304,18 +248,21 @@ class MongoStore(AbstractStore):
         "ILIKE": ["wildcard", "must"]
     }
 
-    def __init__(self, store_uri: str, default_artifact_root) -> None:
+    def __init__(self, store_uri: str, artifact_uri) -> None:
         super(MongoStore, self).__init__()
 
         self.is_plugin = True
-        self.artifact_root_uri = resolve_uri_if_local(default_artifact_root)
+
+        if artifact_uri is None:
+            artifact_uri = DEFAULT_LOCAL_FILE_AND_ARTIFACT_PATH
+        self.artifact_root_uri = resolve_uri_if_local(artifact_uri)
 
         parsed_uri = urllib.parse.urlparse(store_uri)
         self.__db_name = parsed_uri.path.replace('/', '')
         self.__conn = connect(db=self.__db_name, host=f"{parsed_uri.scheme}://{parsed_uri.netloc}")
 
-        if is_local_uri(default_artifact_root):
-            mkdir(local_file_uri_to_path(default_artifact_root))
+        if is_local_uri(artifact_uri):
+            mkdir(local_file_uri_to_path(artifact_uri))
 
         if len(self.search_experiments(view_type=ViewType.ALL)) == 0:
             self._create_default_experiment()
@@ -385,7 +332,24 @@ class MongoStore(AbstractStore):
         experiment.update(name=new_name, last_update_time=get_current_time_millis())
 
     def record_logged_model(self, run_id, mlflow_model):
-        pass
+        from mlflow.models import Model
+
+        if not isinstance(mlflow_model, Model):
+            raise TypeError(
+                "Argument 'mlflow_model' should be mlflow.models.Model, got '{}'".format(
+                    type(mlflow_model)
+                )
+            )
+        model_dict = mlflow_model.to_dict()
+        run = self._get_run(run_uuid=run_id)
+        self._check_run_is_active(run)
+        previous_tag = [t for t in run.tags if t.key == MLFLOW_LOGGED_MODELS]
+        if previous_tag:
+            value = json.dumps(json.loads(previous_tag[0].value) + [model_dict])
+        else:
+            value = json.dumps([model_dict])
+        _validate_tag(MLFLOW_LOGGED_MODELS, value)
+        self._set_tag(run, RunTag(key=MLFLOW_LOGGED_MODELS, value=value))
 
     def set_experiment_tag(self, exp_id, tag):
         _validate_experiment_tag(tag.key, tag.value)
@@ -518,6 +482,7 @@ class MongoStore(AbstractStore):
             num_updates = run.tags.filter(key=MLFLOW_RUN_NAME).update(key=MLFLOW_RUN_NAME, value=run_name)
             if num_updates == 0:
                 run.tags.append(MongoTag(key=MLFLOW_RUN_NAME, value=run_name))
+            run.save()
 
         run.reload()
         return run.to_mlflow_entity().info
@@ -550,7 +515,7 @@ class MongoStore(AbstractStore):
         except MlflowException as e:
             raise e
         except Exception as e:
-            raise MlflowException(e, INTERNAL_ERROR)
+            raise MlflowException(e)
 
     def get_metric_history(self, run_id, metric_key, max_results=None, page_token=None):
         if page_token is not None:
@@ -673,23 +638,22 @@ class MongoStore(AbstractStore):
         if existing.count() == 0:
             new_tag = MongoTag(key=tag.key,
                                value=tag.value)
-            run.tags.append(new_tag)
+            run.update(push__tags=new_tag)
         else:
             existing.update(key=tag.key, value=tag.value)
-
-
+            run.save()
 
     def _search_runs(
             self, experiment_ids, filter_string, run_view_type, max_results, order_by, page_token
     ):
-        def compute_next_token(current_size):
-            next_token = None
-            if max_results == current_size:
-                final_offset = offset + max_results
-                next_token = SearchUtils.create_page_token(final_offset)
-
-            return next_token
-
+        # def compute_next_token(current_size):
+        #     next_token = None
+        #     if max_results == current_size:
+        #         final_offset = offset + max_results
+        #         next_token = SearchUtils.create_page_token(final_offset)
+        #
+        #     return next_token
+        experiment_ids = list(experiment_ids)
         if max_results > SEARCH_MAX_RESULTS_THRESHOLD:
             raise MlflowException(
                 "Invalid value for request parameter max_results. It must be at "
@@ -697,21 +661,24 @@ class MongoStore(AbstractStore):
                 INVALID_PARAMETER_VALUE,
             )
 
-        lifecycle_stages = set(LifecycleStage.view_type_to_stages(run_view_type))
+        lifecycle_stages = list(set(LifecycleStage.view_type_to_stages(run_view_type)))
         _filter = Q(experiment_id__in=experiment_ids)
         _filter &= Q(lifecycle_stage__in=lifecycle_stages)
 
         parsed_filters = SearchUtils.parse_search_filter(filter_string)
         _filter &= _get_search_run_filter_clauses(parsed_filters)
-        order_by_clauses = _get_search_run_order_by_clauses(order_by)
-        offset = SearchUtils.parse_start_offset_from_page_token(page_token)
+        # order_by_clauses = _get_search_run_order_by_clauses(order_by)
+        # offset = SearchUtils.parse_start_offset_from_page_token(page_token)
 
-        runs = MongoRun.objects(_filter).order_by(*order_by_clauses)[offset:max_results + offset + 1]
+        runs = MongoRun.objects(_filter)
         runs = [r.to_mlflow_entity() for r in runs]
+        runs = SearchUtils.sort(runs, order_by)
+        runs, next_page_token = SearchUtils.paginate(runs, page_token, max_results)
 
-        next_page_token = compute_next_token(len(runs))
-
-        return runs[:max_results], next_page_token
+        return runs, next_page_token
+        # next_page_token = compute_next_token(len(runs))
+        #
+        # return runs[:max_results], next_page_token
 
     def _is_valid_run(self, run: MongoRun, stages, parsed_filters):
         if run.lifecycle_stage not in stages:
@@ -742,51 +709,6 @@ class MongoStore(AbstractStore):
                         "Invalid search expression type '%s'" % key_type,
                         error_code=INVALID_PARAMETER_VALUE,
                     )
-
-    # def _build_mongo_query(self, parsed_filters):
-    #     type_dict = {"metric": "latest_metrics", "parameter": "params", "tag": "tags"}
-    #
-    #     search_queries = []
-    #     for f in parsed_filters:
-    #         key_type = f.get("type")
-    #         key_name = f.get("key")
-    #         value = f.get("value")
-    #         comparator = f.get("comparator").upper()
-    #
-    #         key_name = SearchUtils.translate_key_alias(key_name)
-    #
-    #         if SearchUtils.is_string_attribute(key_type, key_name, comparator):
-    #             attribute = getattr(MongoRun, MongoRun.get_attribute_name(key_name))
-    #             attr_filter = self._get_query(True, attribute, comparator, value)
-    #             search_queries.append(attr_filter)
-    #         elif SearchUtils.is_numeric_attribute(key_type, key_name, comparator):
-    #             attribute = getattr(MongoRun, MongoRun.get_attribute_name(key_name))
-    #             attr_filter = self._get_query(False, attribute, comparator, value)
-    #             search_queries.append(attr_filter)
-    #         else:
-    #             if SearchUtils.is_metric(key_type, comparator):
-    #                 entity = MongoLatestMetric
-    #                 value = float(value)
-    #             elif SearchUtils.is_param(key_type, comparator):
-    #                 entity = MongoParam
-    #             elif SearchUtils.is_tag(key_type, comparator):
-    #                 entity = MongoTag
-    #             else:
-    #                 raise MlflowException(
-    #                     "Invalid search expression type '%s'" % key_type,
-    #                     error_code=INVALID_PARAMETER_VALUE,
-    #                 )
-    #
-    #             key_filter = SearchUtils.get_sql_comparison_func("=", dialect)(entity.key, key_name)
-    #             val_filter = SearchUtils.get_sql_comparison_func(comparator, dialect)(
-    #                 entity.value, value
-    #             )
-    #             non_attribute_filters.append(
-    #                 session.query(entity).filter(key_filter, val_filter).subquery()
-    #             )
-    #
-    #         search_query &= Q('nested', path=type_dict[key_type], query=query)
-    #     return search_query
 
     def _get_run(self, run_uuid: str) -> MongoRun:
         runs = MongoRun.objects(run_uuid=run_uuid)

@@ -1,4 +1,3 @@
-import datetime
 import numbers
 
 from mlflow.entities import Experiment, ExperimentTag, RunTag, RunInfo, RunData, Run, Metric, Param, SourceType, \
@@ -200,30 +199,3 @@ class MongoRun(Document):
 
     def get_tags_by_key(self, key):
         return list(filter(lambda param: param.key == key, self.tags))
-
-
-if __name__ == "__main__":
-    from mongoengine import connect
-
-    ex = MongoExperiment.objects()
-
-    mex = MongoExperiment(name="tst2", artifact_location="xyz.com",
-                          tags=[MongoExperimentTag(key="k1", value="v1"),
-                                MongoExperimentTag(key="k2", value="v2")])
-
-    mex.save()
-    # print(mex.id)
-
-    tags_dict = {"k1": "v1", "k2": "v2"}
-    run_tags = [MongoTag(key=key, value=value) for key, value in tags_dict.items()]
-    run = MongoRun(
-        run_id="1",
-        experiment_id="1", user_id="4",
-        status="Running",
-        start_time=datetime.datetime.now(), end_time=None,
-        lifecycle_stage=LifecycleStage.ACTIVE, artifact_uri="artifact_location",
-        tags=run_tags)
-
-    run.save()
-
-    run.update(push__tags=MongoTag(key="k3", value="v3"))
