@@ -5,16 +5,35 @@ import uuid
 from typing import List
 
 import math
-from mlflow.entities import (Experiment, RunTag, Metric, Param, Run,
-                             RunStatus, LifecycleStage, ViewType, SourceType)
+from mlflow.entities import (
+    Experiment,
+    RunTag,
+    Metric,
+    Param,
+    Run,
+    RunStatus,
+    LifecycleStage,
+    ViewType,
+    SourceType,
+)
 from mlflow.protos.databricks_pb2 import (
-    INVALID_PARAMETER_VALUE, INVALID_STATE, RESOURCE_DOES_NOT_EXIST)
+    INVALID_PARAMETER_VALUE,
+    INVALID_STATE,
+    RESOURCE_DOES_NOT_EXIST,
+)
 from mlflow.store.entities import PagedList
 from mlflow.store.model_registry import DEFAULT_LOCAL_FILE_AND_ARTIFACT_PATH
-from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT, SEARCH_MAX_RESULTS_THRESHOLD
+from mlflow.store.tracking import (
+    SEARCH_MAX_RESULTS_DEFAULT,
+    SEARCH_MAX_RESULTS_THRESHOLD,
+)
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.utils.file_utils import local_file_uri_to_path, mkdir
-from mlflow.utils.mlflow_tags import _get_run_name_from_tags, MLFLOW_RUN_NAME, MLFLOW_LOGGED_MODELS
+from mlflow.utils.mlflow_tags import (
+    _get_run_name_from_tags,
+    MLFLOW_RUN_NAME,
+    MLFLOW_LOGGED_MODELS,
+)
 from mlflow.utils.name_utils import _generate_random_name
 from mongoengine import connect, BulkWriteError
 from mongoengine.queryset.visitor import Q
@@ -26,14 +45,25 @@ from mlflow.utils.search_utils import SearchUtils, SearchExperimentsUtils
 from mlflow.utils.validation import (
     _validate_batch_log_limits,
     _validate_batch_log_data,
-    _validate_run_id, _validate_experiment_name, _validate_experiment_tag, _validate_metric,
-    _validate_param_keys_unique, _validate_tag,
+    _validate_run_id,
+    _validate_experiment_name,
+    _validate_experiment_tag,
+    _validate_metric,
+    _validate_param_keys_unique,
+    _validate_tag,
 )
 from mlflow.utils.time_utils import get_current_time_millis
 
-from mlflow_mongostore.models import (MongoExperiment, MongoRun, MongoMetric,
-                                      MongoParam, MongoTag,
-                                      MongoExperimentTag, SequenceId, MongoLatestMetric)
+from mlflow_mongostore.models import (
+    MongoExperiment,
+    MongoRun,
+    MongoMetric,
+    MongoParam,
+    MongoTag,
+    MongoExperimentTag,
+    SequenceId,
+    MongoLatestMetric,
+)
 
 RunStatusTypes = [
     RunStatus.to_string(RunStatus.SCHEDULED),
@@ -90,7 +120,7 @@ def _get_list_contains_query(key, val, comp, list_field_name):
     elif comp == "LIKE":
         value_filter = {"$regex": _like_to_regex(val)}
     elif comp == "ILIKE":
-        value_filter = {"$regex": _like_to_regex(val), "$options": 'i'}
+        value_filter = {"$regex": _like_to_regex(val), "$options": "i"}
 
     return Q(**{f"{list_field_name}__match": {"key": key, "value": value_filter}})
 
@@ -130,11 +160,13 @@ def _get_search_experiments_filter_clauses(parsed_filters):
         value = f["value"]
         if type_ == "attribute":
             if SearchExperimentsUtils.is_string_attribute(
-                    type_, key, comparator
+                type_, key, comparator
             ) and comparator not in ("=", "!=", "LIKE", "ILIKE"):
-                raise MlflowException.invalid_parameter_value(f"Invalid comparator for string attribute: {comparator}")
+                raise MlflowException.invalid_parameter_value(
+                    f"Invalid comparator for string attribute: {comparator}"
+                )
             if SearchExperimentsUtils.is_numeric_attribute(
-                    type_, key, comparator
+                type_, key, comparator
             ) and comparator not in ("=", "!=", "<", "<=", ">", ">="):
                 raise MlflowException.invalid_parameter_value(
                     f"Invalid comparator for numeric attribute: {comparator}"
@@ -145,10 +177,13 @@ def _get_search_experiments_filter_clauses(parsed_filters):
                 raise MlflowException.invalid_parameter_value(
                     f"Invalid comparator for tag: {comparator}"
                 )
-            _filter &= _get_list_contains_query(key=key, val=value,
-                                                comp=comparator, list_field_name="tags")
+            _filter &= _get_list_contains_query(
+                key=key, val=value, comp=comparator, list_field_name="tags"
+            )
         else:
-            raise MlflowException.invalid_parameter_value(f"Invalid token type: {type_}")
+            raise MlflowException.invalid_parameter_value(
+                f"Invalid token type: {type_}"
+            )
 
     return _filter
 
@@ -156,13 +191,15 @@ def _get_search_experiments_filter_clauses(parsed_filters):
 def _get_search_experiments_order_by_clauses(order_by):
     order_by_clauses = []
     for type_, key, ascending in map(
-            SearchExperimentsUtils.parse_order_by_for_search_experiments,
-            order_by or ["creation_time DESC", "experiment_id ASC"],
+        SearchExperimentsUtils.parse_order_by_for_search_experiments,
+        order_by or ["creation_time DESC", "experiment_id ASC"],
     ):
         if type_ == "attribute":
             order_by_clauses.append((key, ascending))
         else:
-            raise MlflowException.invalid_parameter_value(f"Invalid order_by entity: {type_}")
+            raise MlflowException.invalid_parameter_value(
+                f"Invalid order_by entity: {type_}"
+            )
 
     # Add a tie-breaker
     if not any(col == "experiment_id" for col, _ in order_by_clauses):
@@ -183,28 +220,36 @@ def _get_search_run_filter_clauses(parsed_filters):
         key = SearchUtils.translate_key_alias(key)
 
         if SearchUtils.is_string_attribute(
-                type_, key, comparator
+            type_, key, comparator
         ) or SearchUtils.is_numeric_attribute(type_, key, comparator):
             if key == "run_name":
                 # Treat "attributes.run_name == <value>" as "tags.`mlflow.runName` == <value>".
                 # The name column in the runs table is empty for runs logged in MLFlow <= 1.29.0.
-                _filter &= _get_list_contains_query(key=MLFLOW_RUN_NAME, val=value,
-                                                    comp=comparator, list_field_name="tags")
+                _filter &= _get_list_contains_query(
+                    key=MLFLOW_RUN_NAME,
+                    val=value,
+                    comp=comparator,
+                    list_field_name="tags",
+                )
             else:
                 key = MongoRun.get_attribute_name(key)
                 _filter &= _get_filter_query(key, comparator, value)
         else:
             if SearchUtils.is_metric(type_, comparator):
                 value = float(value)
-                _filter &= _get_metrics_contains_query(key=key, val=value, comp=comparator)
+                _filter &= _get_metrics_contains_query(
+                    key=key, val=value, comp=comparator
+                )
             elif SearchUtils.is_param(type_, comparator):
                 entity = "params"
-                _filter &= _get_list_contains_query(key=key, val=value,
-                                                    comp=comparator, list_field_name=entity)
+                _filter &= _get_list_contains_query(
+                    key=key, val=value, comp=comparator, list_field_name=entity
+                )
             elif SearchUtils.is_tag(type_, comparator):
                 entity = "tags"
-                _filter &= _get_list_contains_query(key=key, val=value,
-                                                    comp=comparator, list_field_name=entity)
+                _filter &= _get_list_contains_query(
+                    key=key, val=value, comp=comparator, list_field_name=entity
+                )
             else:
                 raise MlflowException(
                     "Invalid search expression type '%s'" % type_,
@@ -220,11 +265,13 @@ def _get_next_exp_id(start_over=False):
         seq.save()
         return "0"
 
-    return str(SequenceId._get_collection().find_one_and_update(
-        filter={"_id": "mlflow-experiments"},
-        update={"$inc": {"sequence_value": 1}},
-        new=True
-    )['sequence_value'])
+    return str(
+        SequenceId._get_collection().find_one_and_update(
+            filter={"_id": "mlflow-experiments"},
+            update={"$inc": {"sequence_value": 1}},
+            new=True,
+        )["sequence_value"]
+    )
 
 
 class MongoStore(AbstractStore):
@@ -240,7 +287,7 @@ class MongoStore(AbstractStore):
         "<=": ["range", "must"],
         "<": ["range", "must"],
         "LIKE": ["wildcard", "must"],
-        "ILIKE": ["wildcard", "must"]
+        "ILIKE": ["wildcard", "must"],
     }
 
     def __init__(self, store_uri: str, artifact_uri) -> None:
@@ -253,8 +300,10 @@ class MongoStore(AbstractStore):
         self.artifact_root_uri = resolve_uri_if_local(artifact_uri)
 
         parsed_uri = urllib.parse.urlparse(store_uri)
-        self.__db_name = parsed_uri.path.replace('/', '')
-        self.__conn = connect(db=self.__db_name, host=f"{parsed_uri.scheme}://{parsed_uri.netloc}")
+        self.__db_name = parsed_uri.path.replace("/", "")
+        self.__conn = connect(
+            db=self.__db_name, host=f"{parsed_uri.scheme}://{parsed_uri.netloc}"
+        )
 
         if is_local_uri(artifact_uri):
             mkdir(local_file_uri_to_path(artifact_uri))
@@ -278,26 +327,42 @@ class MongoStore(AbstractStore):
 
         existing_names = self._list_experiments_name()
         if name in existing_names:
-            raise MlflowException(f'Experiment(name={name}) already exists', INVALID_PARAMETER_VALUE)
+            raise MlflowException(
+                f"Experiment(name={name}) already exists", INVALID_PARAMETER_VALUE
+            )
 
         tags_dict = {}
         if tags is not None:
             for tag in tags:
                 tags_dict[tag.key] = tag.value
-        exp_tags = [MongoExperimentTag(key=key, value=value) for key, value in tags_dict.items()]
+        exp_tags = [
+            MongoExperimentTag(key=key, value=value) for key, value in tags_dict.items()
+        ]
 
         curr_time = get_current_time_millis()
-        experiment = MongoExperiment(exp_id=_get_next_exp_id(), name=name, lifecycle_stage=LifecycleStage.ACTIVE,
-                                     artifact_location=artifact_location, tags=exp_tags, creation_time=curr_time,
-                                     last_update_time=curr_time)
+        experiment = MongoExperiment(
+            exp_id=_get_next_exp_id(),
+            name=name,
+            lifecycle_stage=LifecycleStage.ACTIVE,
+            artifact_location=artifact_location,
+            tags=exp_tags,
+            creation_time=curr_time,
+            last_update_time=curr_time,
+        )
         experiment.save()
         if not artifact_location:
             artifact_location = self._get_artifact_location(experiment.id)
         experiment.update(artifact_location=artifact_location)
         return str(experiment.id)
 
-    def search_experiments(self, view_type=ViewType.ACTIVE_ONLY, max_results=SEARCH_MAX_RESULTS_DEFAULT,
-                           filter_string=None, order_by=None, page_token=None):
+    def search_experiments(
+        self,
+        view_type=ViewType.ACTIVE_ONLY,
+        max_results=SEARCH_MAX_RESULTS_DEFAULT,
+        filter_string=None,
+        order_by=None,
+        page_token=None,
+    ):
         experiments, next_page_token = self._search_experiments(
             view_type, max_results, filter_string, order_by, page_token
         )
@@ -306,24 +371,39 @@ class MongoStore(AbstractStore):
     def delete_experiment(self, experiment_id):
         experiment = self._get_experiment(experiment_id)
         if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
-            raise MlflowException('Cannot delete an already deleted experiment.', INVALID_STATE)
+            raise MlflowException(
+                "Cannot delete an already deleted experiment.", INVALID_STATE
+            )
         for run in self._list_run_by_exp_id(experiment_id):
-            run.update(lifecycle_stage=LifecycleStage.DELETED, deleted_time=get_current_time_millis())
-        experiment.update(lifecycle_stage=LifecycleStage.DELETED, last_update_time=get_current_time_millis())
+            run.update(
+                lifecycle_stage=LifecycleStage.DELETED,
+                deleted_time=get_current_time_millis(),
+            )
+        experiment.update(
+            lifecycle_stage=LifecycleStage.DELETED,
+            last_update_time=get_current_time_millis(),
+        )
 
     def restore_experiment(self, experiment_id):
         experiment = self._get_experiment(experiment_id)
         if experiment.lifecycle_stage != LifecycleStage.DELETED:
-            raise MlflowException('Cannot restore an already active experiment.', INVALID_STATE)
+            raise MlflowException(
+                "Cannot restore an already active experiment.", INVALID_STATE
+            )
 
         for run in self._list_run_by_exp_id(experiment_id):
             run.update(lifecycle_stage=LifecycleStage.ACTIVE, deleted_time=None)
-        experiment.update(lifecycle_stage=LifecycleStage.ACTIVE, last_update_time=get_current_time_millis())
+        experiment.update(
+            lifecycle_stage=LifecycleStage.ACTIVE,
+            last_update_time=get_current_time_millis(),
+        )
 
     def rename_experiment(self, experiment_id: str, new_name: str) -> None:
         experiment = self._get_experiment(experiment_id)
         if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
-            raise MlflowException('Cannot rename a non-active experiment.', INVALID_STATE)
+            raise MlflowException(
+                "Cannot rename a non-active experiment.", INVALID_STATE
+            )
         experiment.update(name=new_name, last_update_time=get_current_time_millis())
 
     def record_logged_model(self, run_id, mlflow_model):
@@ -352,7 +432,9 @@ class MongoStore(AbstractStore):
         self._check_experiment_is_active(experiment)
         experiment.update(push__tags=MongoExperimentTag(key=tag.key, value=tag.value))
 
-    def _search_experiments(self, view_type, max_results, filter_string, order_by, page_token):
+    def _search_experiments(
+        self, view_type, max_results, filter_string, order_by, page_token
+    ):
         def compute_next_token(current_size):
             next_token = None
             if max_results + 1 == current_size:
@@ -384,7 +466,9 @@ class MongoStore(AbstractStore):
         order_by_clauses = _get_search_experiments_order_by_clauses(order_by)
         offset = SearchUtils.parse_start_offset_from_page_token(page_token)
 
-        experiments = MongoExperiment.objects(_filter).order_by(*order_by_clauses)[offset:max_results + offset + 1]
+        experiments = MongoExperiment.objects(_filter).order_by(*order_by_clauses)[
+            offset : max_results + offset + 1
+        ]
         experiments = [e.to_mlflow_entity() for e in experiments]
 
         next_page_token = compute_next_token(len(experiments))
@@ -395,14 +479,15 @@ class MongoStore(AbstractStore):
         return MongoRun.objects(experiment_id=experiment_id)
 
     def _list_experiments_name(self) -> List[str]:
-        return [obj.name for obj in MongoExperiment.objects.only('name')]
+        return [obj.name for obj in MongoExperiment.objects.only("name")]
 
     def _get_experiment(self, experiment_id: str) -> MongoExperiment:
         try:
             experiment = MongoExperiment.objects(exp_id=experiment_id)[0]
         except IndexError:
             raise MlflowException(
-                "No Experiment with id={} exists".format(experiment_id), RESOURCE_DOES_NOT_EXIST
+                "No Experiment with id={} exists".format(experiment_id),
+                RESOURCE_DOES_NOT_EXIST,
             )
         return experiment
 
@@ -417,7 +502,9 @@ class MongoStore(AbstractStore):
         if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise MlflowException(
                 "The experiment {} must be in the 'active' state. "
-                "Current state is {}.".format(experiment.id, experiment.lifecycle_stage),
+                "Current state is {}.".format(
+                    experiment.id, experiment.lifecycle_stage
+                ),
                 INVALID_PARAMETER_VALUE,
             )
 
@@ -429,8 +516,9 @@ class MongoStore(AbstractStore):
         self._check_experiment_is_active(experiment)
 
         run_id = uuid.uuid4().hex
-        artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
-                                               MongoStore.ARTIFACTS_FOLDER_NAME)
+        artifact_location = append_to_uri_path(
+            experiment.artifact_location, run_id, MongoStore.ARTIFACTS_FOLDER_NAME
+        )
 
         tags = tags or []
         run_name_tag = _get_run_name_from_tags(tags)
@@ -446,21 +534,23 @@ class MongoStore(AbstractStore):
             tags.append(RunTag(key=MLFLOW_RUN_NAME, value=run_name))
 
         run_tags = [MongoTag(key=tag.key, value=tag.value) for tag in tags]
-        run = MongoRun(name=run_name,
-                       artifact_uri=artifact_location,
-                       run_uuid=run_id,
-                       experiment_id=experiment_id,
-                       source_type=SourceType.to_string(SourceType.UNKNOWN),
-                       source_name="",
-                       entry_point_name="",
-                       user_id=user_id,
-                       status=RunStatus.to_string(RunStatus.RUNNING),
-                       start_time=start_time,
-                       end_time=None,
-                       deleted_time=None,
-                       source_version="",
-                       lifecycle_stage=LifecycleStage.ACTIVE,
-                       tags=run_tags)
+        run = MongoRun(
+            name=run_name,
+            artifact_uri=artifact_location,
+            run_uuid=run_id,
+            experiment_id=experiment_id,
+            source_type=SourceType.to_string(SourceType.UNKNOWN),
+            source_name="",
+            entry_point_name="",
+            user_id=user_id,
+            status=RunStatus.to_string(RunStatus.RUNNING),
+            start_time=start_time,
+            end_time=None,
+            deleted_time=None,
+            source_version="",
+            lifecycle_stage=LifecycleStage.ACTIVE,
+            tags=run_tags,
+        )
 
         run.save()
         return run.to_mlflow_entity()
@@ -474,7 +564,9 @@ class MongoStore(AbstractStore):
         run.update(status=RunStatus.to_string(run_status), end_time=end_time)
         if run_name:
             run.update(name=run_name)
-            num_updates = run.tags.filter(key=MLFLOW_RUN_NAME).update(key=MLFLOW_RUN_NAME, value=run_name)
+            num_updates = run.tags.filter(key=MLFLOW_RUN_NAME).update(
+                key=MLFLOW_RUN_NAME, value=run_name
+            )
             if num_updates == 0:
                 run.tags.append(MongoTag(key=MLFLOW_RUN_NAME, value=run_name))
             run.save()
@@ -484,14 +576,22 @@ class MongoStore(AbstractStore):
 
     def delete_run(self, run_id):
         run = self._get_run(run_id)
-        run.update(lifecycle_stage=LifecycleStage.DELETED, deleted_time=get_current_time_millis())
+        run.update(
+            lifecycle_stage=LifecycleStage.DELETED,
+            deleted_time=get_current_time_millis(),
+        )
 
     def restore_run(self, run_id):
         run = self._get_run(run_id)
         run.update(lifecycle_stage=LifecycleStage.ACTIVE, deleted_time=None)
 
-    def log_batch(self, run_id: str, metrics: List[Metric],
-                  params: List[Param], tags: List[RunTag]) -> None:
+    def log_batch(
+        self,
+        run_id: str,
+        metrics: List[Metric],
+        params: List[Param],
+        tags: List[RunTag],
+    ) -> None:
         _validate_run_id(run_id)
         _validate_batch_log_data(metrics, params, tags)
         _validate_batch_log_limits(metrics, params, tags)
@@ -542,7 +642,6 @@ class MongoStore(AbstractStore):
         run.update(pull__tags=tags[0])
 
     def _log_metrics(self, run, metrics):
-
         metric_instances = []
         seen = set()
         for metric in metrics:
@@ -577,7 +676,9 @@ class MongoStore(AbstractStore):
             value = 0
         elif math.isinf(metric.value):
             #  NB: Sql can not represent Infs = > We replace +/- Inf with max/min 64b float value
-            value = 1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
+            value = (
+                1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
+            )
         else:
             value = metric.value
         return metric, value, is_nan
@@ -594,11 +695,13 @@ class MongoStore(AbstractStore):
                 metric_b.value,
             )
 
-        new_latest_metric = MongoLatestMetric(key=logged_metric.key,
-                                              value=logged_metric.value,
-                                              timestamp=logged_metric.timestamp,
-                                              step=logged_metric.step,
-                                              is_nan=logged_metric.is_nan)
+        new_latest_metric = MongoLatestMetric(
+            key=logged_metric.key,
+            value=logged_metric.value,
+            timestamp=logged_metric.timestamp,
+            step=logged_metric.step,
+            is_nan=logged_metric.is_nan,
+        )
 
         latest_metric_exist = False
         for i, latest_metric in enumerate(run.latest_metrics):
@@ -620,8 +723,7 @@ class MongoStore(AbstractStore):
                 )
             else:
                 return
-        new_param = MongoParam(key=param.key,
-                               value=param.value)
+        new_param = MongoParam(key=param.key, value=param.value)
         run.update(push__params=new_param)
         run.reload()
 
@@ -631,15 +733,20 @@ class MongoStore(AbstractStore):
 
         existing = run.tags.filter(key=tag.key)
         if existing.count() == 0:
-            new_tag = MongoTag(key=tag.key,
-                               value=tag.value)
+            new_tag = MongoTag(key=tag.key, value=tag.value)
             run.update(push__tags=new_tag)
         else:
             existing.update(key=tag.key, value=tag.value)
             run.save()
 
     def _search_runs(
-            self, experiment_ids, filter_string, run_view_type, max_results, order_by, page_token
+        self,
+        experiment_ids,
+        filter_string,
+        run_view_type,
+        max_results,
+        order_by,
+        page_token,
     ):
         # def compute_next_token(current_size):
         #     next_token = None
@@ -686,10 +793,8 @@ class MongoStore(AbstractStore):
             comparator = f.get("comparator").upper()
 
             if SearchUtils.is_string_attribute(
-                    key_type, key_name, comparator
-            ) or SearchUtils.is_numeric_attribute(
                 key_type, key_name, comparator
-            ):
+            ) or SearchUtils.is_numeric_attribute(key_type, key_name, comparator):
                 return run.match_attr(key_name, comparator, value)
             else:
                 if SearchUtils.is_metric(key_type, comparator):
@@ -724,15 +829,22 @@ class MongoStore(AbstractStore):
 
     def _get_deleted_runs(self, older_than=0):
         current_time = get_current_time_millis()
-        return [r.run_uuid
-                for r in
-                MongoRun.objects(lifecycle_stage=LifecycleStage.DELETED, deleted_time__lte=(current_time - older_than))]
+        return [
+            r.run_uuid
+            for r in MongoRun.objects(
+                lifecycle_stage=LifecycleStage.DELETED,
+                deleted_time__lte=(current_time - older_than),
+            )
+        ]
 
     def _check_run_is_active(self, run: MongoRun) -> None:
         if run.lifecycle_stage != LifecycleStage.ACTIVE:
-            raise MlflowException("The run {} must be in the 'active' state. Current state is {}."
-                                  .format(run.id, run.lifecycle_stage),
-                                  INVALID_PARAMETER_VALUE)
+            raise MlflowException(
+                "The run {} must be in the 'active' state. Current state is {}.".format(
+                    run.id, run.lifecycle_stage
+                ),
+                INVALID_PARAMETER_VALUE,
+            )
 
     def _create_default_experiment(self):
         """
@@ -751,7 +863,7 @@ class MongoStore(AbstractStore):
             artifact_location=self._get_artifact_location(0),
             lifecycle_stage=LifecycleStage.ACTIVE,
             creation_time=creation_time,
-            last_update_time=creation_time
+            last_update_time=creation_time,
         )
         exp.save()
 

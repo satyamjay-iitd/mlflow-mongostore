@@ -1,14 +1,35 @@
 import numbers
 
-from mlflow.entities import Experiment, ExperimentTag, RunTag, RunInfo, RunData, Run, Metric, Param, SourceType, \
-    RunStatus
+from mlflow.entities import (
+    Experiment,
+    ExperimentTag,
+    RunTag,
+    RunInfo,
+    RunData,
+    Run,
+    Metric,
+    Param,
+    SourceType,
+    RunStatus,
+)
 from mlflow.entities import LifecycleStage
 from mlflow.utils.mlflow_tags import _get_run_name_from_tags
 from mlflow.utils.time_utils import get_current_time_millis
 
-from mongoengine import Document, StringField, ListField, EmbeddedDocument, \
-    EmbeddedDocumentField, FloatField, IntField, BooleanField, LongField, ReferenceField, \
-    CASCADE, EmbeddedDocumentListField
+from mongoengine import (
+    Document,
+    StringField,
+    ListField,
+    EmbeddedDocument,
+    EmbeddedDocumentField,
+    FloatField,
+    IntField,
+    BooleanField,
+    LongField,
+    ReferenceField,
+    CASCADE,
+    EmbeddedDocumentListField,
+)
 
 
 def compare_attr(val1, comp, val2):
@@ -51,8 +72,7 @@ class MongoExperimentTag(EmbeddedDocument):
     value = StringField(required=True)
 
     def to_mlflow_entity(self) -> ExperimentTag:
-        return ExperimentTag(key=self.key,
-                             value=self.value)
+        return ExperimentTag(key=self.key, value=self.value)
 
 
 class MongoExperiment(Document):
@@ -64,7 +84,7 @@ class MongoExperiment(Document):
     creation_time = LongField()
     last_update_time = LongField()
 
-    meta = {'collection': 'mlflow_experiments'}
+    meta = {"collection": "mlflow_experiments"}
 
     def to_mlflow_entity(self) -> Experiment:
         return Experiment(
@@ -74,7 +94,7 @@ class MongoExperiment(Document):
             lifecycle_stage=self.lifecycle_stage,
             tags=[t.to_mlflow_entity() for t in self.tags],
             creation_time=self.creation_time,
-            last_update_time=self.last_update_time
+            last_update_time=self.last_update_time,
         )
 
 
@@ -83,9 +103,7 @@ class MongoTag(EmbeddedDocument):
     value = StringField(required=True)
 
     def to_mlflow_entity(self) -> RunTag:
-        return RunTag(
-            key=self.key,
-            value=self.value)
+        return RunTag(key=self.key, value=self.value)
 
 
 class MongoParam(EmbeddedDocument):
@@ -93,9 +111,7 @@ class MongoParam(EmbeddedDocument):
     value = StringField(required=True)
 
     def to_mlflow_entity(self) -> Param:
-        return Param(
-            key=self.key,
-            value=self.value)
+        return Param(key=self.key, value=self.value)
 
 
 class MongoMetric(Document):
@@ -104,17 +120,19 @@ class MongoMetric(Document):
     step = LongField(required=True, default=0)
     is_nan = BooleanField(required=True, default=False)
     run_uuid = StringField(required=True)
-    value = FloatField(unique_with=["key", "timestamp", "step", "run_uuid"],
-                       required=True)
+    value = FloatField(
+        unique_with=["key", "timestamp", "step", "run_uuid"], required=True
+    )
 
-    meta = {'collection': "mlflow_metric"}
+    meta = {"collection": "mlflow_metric"}
 
     def to_mlflow_entity(self) -> Metric:
         return Metric(
             key=self.key,
             value=self.value if not self.is_nan else float("nan"),
             timestamp=self.timestamp,
-            step=self.step)
+            step=self.step,
+        )
 
 
 class MongoLatestMetric(EmbeddedDocument):
@@ -129,17 +147,22 @@ class MongoLatestMetric(EmbeddedDocument):
             key=self.key,
             value=self.value if not self.is_nan else float("nan"),
             timestamp=self.timestamp,
-            step=self.step)
+            step=self.step,
+        )
 
 
 class MongoRun(Document):
     run_uuid = StringField(primary_key=True, required=True, max_length=32)
     name = StringField(max_length=250)
-    source_type = StringField(max_length=20, default=SourceType.to_string(SourceType.LOCAL))
+    source_type = StringField(
+        max_length=20, default=SourceType.to_string(SourceType.LOCAL)
+    )
     source_name = StringField(max_length=500)
     entry_point_name = StringField(max_length=50)
     user_id = StringField(max_length=256, default="")
-    status = StringField(max_length=20, default=RunStatus.to_string(RunStatus.SCHEDULED))
+    status = StringField(
+        max_length=20, default=RunStatus.to_string(RunStatus.SCHEDULED)
+    )
     start_time = LongField(default=get_current_time_millis)
     end_time = LongField()
     deleted_time = LongField()
@@ -147,14 +170,14 @@ class MongoRun(Document):
     lifecycle_stage = StringField(max_length=20, default=LifecycleStage.ACTIVE)
     artifact_uri = StringField(max_length=200)
 
-    experiment_id = ReferenceField('MongoExperiment', reverse_delete_rule=CASCADE)
+    experiment_id = ReferenceField("MongoExperiment", reverse_delete_rule=CASCADE)
 
     latest_metrics = ListField(EmbeddedDocumentField(MongoLatestMetric))
     params = ListField(EmbeddedDocumentField(MongoParam))
     # tags = ListField(EmbeddedDocumentField(MongoTag))
     tags = EmbeddedDocumentListField(MongoTag)
 
-    meta = {'collection': "mlflow_runs"}
+    meta = {"collection": "mlflow_runs"}
 
     def to_mlflow_entity(self) -> Run:
         run_info = RunInfo(
@@ -174,7 +197,8 @@ class MongoRun(Document):
         run_data = RunData(
             metrics=[m.to_mlflow_entity() for m in self.latest_metrics],
             params=[p.to_mlflow_entity() for p in self.params],
-            tags=tags)
+            tags=tags,
+        )
 
         if not run_info.run_name:
             run_name = _get_run_name_from_tags(tags)
